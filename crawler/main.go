@@ -22,6 +22,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
@@ -395,15 +396,23 @@ func stealthOnNewDocument() chromedp.Action {
         const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
         if (originalQuery) {
             window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                Promise.resolve({ state: Notification.permission }) :
-                originalQuery(parameters)
+                parameters.name === 'notifications'
+                    ? Promise.resolve({ state: Notification.permission })
+                    : originalQuery(parameters)
             );
         }
         Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3] });
         Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN','zh','en'] });
     })();`
-	return chromedp.EvaluateOnNewDocument(script)
+
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		// 需要先启用 page domain
+		if err := page.Enable().Do(ctx); err != nil {
+			return err
+		}
+		_, err := page.AddScriptToEvaluateOnNewDocument(script).Do(ctx)
+		return err
+	})
 }
 
 func (c *ChromedpFetcher) Fetch(ctx context.Context, u string) (string, error) {
