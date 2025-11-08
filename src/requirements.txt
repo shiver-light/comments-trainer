@@ -1,0 +1,9 @@
+transformers>=4.44
+datasets>=2.19
+peft>=0.12
+accelerate>=0.33
+trl>=0.9
+faiss-cpu>=1.8
+uvicorn>=0.30
+fastapi>=0.115
+pydantic>=2.9
