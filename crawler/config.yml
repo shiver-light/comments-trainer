@@ -33,6 +33,7 @@ platforms:
 
   xhs:   # 小红书
     engine: "chromedp"                                # 动态渲染更稳
+    cookie_file: "cookies/xhs.json"
     allowed_domains: ["www.xiaohongshu.com", "www.xhs.cn"]
     start_urls:
       - "https://www.xiaohongshu.com/search_result?keyword={keyword}"  # 示意
@@ -58,4 +59,3 @@ platforms:
           pause_ms: 700    # 每次下拉后等待毫秒
           wait_selector: ".note-item, .comment-item"  # 每次下拉后等待出现的元素（可留空）
           stop_if_no_growth: 3  # 连续几次高度无增长就提前停止
-      cookie_file: "cookies/xhs.json"
