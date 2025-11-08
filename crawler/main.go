@@ -29,7 +29,7 @@ import (
 )
 
 /* =========================
-   配置结构
+   配置
 ========================= */
 
 type Config struct {
@@ -51,9 +51,9 @@ type PlatformConfig struct {
 		ItemAttr     string `yaml:"item_attr"`
 	} `yaml:"list"`
 	Reviews struct {
-		PageURLPattern string            `yaml:"page_url_pattern"` // "{restaurant_url}"
+		PageURLPattern string            `yaml:"page_url_pattern"`
 		ReviewItem     string            `yaml:"review_item"`
-		Fields         map[string]string `yaml:"fields"` // restaurant/user/rating_text/rating_attr/content/date/permalink_attr
+		Fields         map[string]string `yaml:"fields"`
 		NextPage       string            `yaml:"next_page"`
 		MaxPages       int               `yaml:"max_pages"`
 	} `yaml:"reviews"`
@@ -66,12 +66,12 @@ type ScrollConfig struct {
 	Enabled        bool   `yaml:"enabled"`
 	Steps          int    `yaml:"steps"`
 	PauseMS        int    `yaml:"pause_ms"`
-	WaitSelector   string `yaml:"wait_selector"`
+	WaitSelector   string `yaml:"wait_selector"` // 例如：".note-item,.comment-item"
 	StopIfNoGrowth int    `yaml:"stop_if_no_growth"`
 }
 
 /* =========================
-   数据模型
+   数据
 ========================= */
 
 type Review struct {
@@ -88,7 +88,7 @@ type Review struct {
 }
 
 /* =========================
-   工具函数
+   工具
 ========================= */
 
 func must(err error) {
@@ -114,17 +114,16 @@ func loadConfig(path string) (*Config, error) {
 		cfg.Global.RatePerSec = 0.8
 	}
 	if cfg.Global.UserAgent == "" {
-		// 给个保底 UA，建议在 config.yml 里显式配置为你浏览器的 UA
 		cfg.Global.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 	}
 	return &cfg, nil
 }
 
-func substituteKeyword(u, keyword string) string {
-	return strings.ReplaceAll(u, "{keyword}", url.QueryEscape(keyword))
+func substituteKeyword(u, kw string) string {
+	return strings.ReplaceAll(u, "{keyword}", url.QueryEscape(kw))
 }
 
-func joinURL(base string, href string) string {
+func joinURL(base, href string) string {
 	if strings.HasPrefix(href, "http://") || strings.HasPrefix(href, "https://") {
 		return href
 	}
@@ -154,7 +153,7 @@ func domainAllowed(u string, allowed []string) bool {
 	return false
 }
 
-// 从容器内提取字段；支持 "selector@attr"
+// "selector@attr" / "selector" 文本
 func pick(doc *goquery.Selection, sel string) string {
 	if sel == "" {
 		return ""
@@ -172,7 +171,7 @@ func pick(doc *goquery.Selection, sel string) string {
 }
 
 /* =========================
-   Cookie 读入（兼容扩展/DevTools JSON）
+   Cookie 读入
 ========================= */
 
 type simpleCookie struct {
@@ -194,11 +193,7 @@ func LoadCookiesFromFile(path string) []*http.Cookie {
 	}
 	var cookies []*http.Cookie
 	for _, c := range raw {
-		ck := &http.Cookie{
-			Name:  c.Name,
-			Value: c.Value,
-			Path:  "/",
-		}
+		ck := &http.Cookie{Name: c.Name, Value: c.Value, Path: "/"}
 		if c.Domain != "" {
 			ck.Domain = c.Domain
 		}
@@ -211,7 +206,7 @@ func LoadCookiesFromFile(path string) []*http.Cookie {
 }
 
 /* =========================
-   抓取引擎：HTTP / Chromedp
+   抓取引擎
 ========================= */
 
 type Fetcher interface {
@@ -219,7 +214,7 @@ type Fetcher interface {
 	Close() error
 }
 
-/*** HTTP fetcher + debug ***/
+/*** HTTP fetcher（用于自检） ***/
 
 type dbgRoundTripper struct {
 	rt    http.RoundTripper
@@ -252,27 +247,18 @@ type HTTPFetcher struct {
 
 func NewHTTPFetcher(timeout time.Duration, ua string, rps float64) (*HTTPFetcher, error) {
 	jar, _ := cookiejar.New(nil)
-	base := http.DefaultTransport
 	client := &http.Client{
 		Timeout:   timeout,
 		Jar:       jar,
-		Transport: dbgRoundTripper{rt: base, debug: false},
+		Transport: dbgRoundTripper{rt: http.DefaultTransport, debug: false},
 	}
-	return &HTTPFetcher{
-		client:  client,
-		ua:      ua,
-		limiter: rate.NewLimiter(rate.Limit(rps), 1),
-	}, nil
+	return &HTTPFetcher{client: client, ua: ua, limiter: rate.NewLimiter(rate.Limit(rps), 1)}, nil
 }
-
 func (h *HTTPFetcher) SetCookiesForPlatform(cookieFile string) {
 	if cookieFile == "" {
 		return
 	}
 	cs := LoadCookiesFromFile(cookieFile)
-	if len(cs) == 0 {
-		return
-	}
 	for _, ck := range cs {
 		domain := strings.TrimPrefix(ck.Domain, ".")
 		if domain == "" {
@@ -284,7 +270,6 @@ func (h *HTTPFetcher) SetCookiesForPlatform(cookieFile string) {
 		}
 	}
 }
-
 func (h *HTTPFetcher) Fetch(ctx context.Context, u string) (string, error) {
 	if err := h.limiter.Wait(ctx); err != nil {
 		return "", err
@@ -301,12 +286,11 @@ func (h *HTTPFetcher) Fetch(ctx context.Context, u string) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return string(b), nil
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		// 允许 3xx，在外层自检会特殊处理
-		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-			b, _ := io.ReadAll(resp.Body)
-			return string(b), nil
-		}
 		return "", fmt.Errorf("http %d for %s", resp.StatusCode, u)
 	}
 	b, err := io.ReadAll(resp.Body)
@@ -315,10 +299,9 @@ func (h *HTTPFetcher) Fetch(ctx context.Context, u string) (string, error) {
 	}
 	return string(b), nil
 }
-
 func (h *HTTPFetcher) Close() error { return nil }
 
-/*** Chromedp fetcher + debug ***/
+/*** Chromedp fetcher（核心） ***/
 
 type ChromedpFetcher struct {
 	ctx     context.Context
@@ -330,9 +313,8 @@ type ChromedpFetcher struct {
 }
 
 func NewChromedpFetcher(timeout time.Duration, rps float64, ua string) (*ChromedpFetcher, error) {
-	// ExecAllocator：规避 AutomationControlled，设置语言/窗口等
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true), // 调试可改为 false
+		chromedp.Flag("headless", true), // 调试可改 false
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("lang", "zh-CN,zh;q=0.9,en;q=0.8"),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
@@ -340,13 +322,10 @@ func NewChromedpFetcher(timeout time.Duration, rps float64, ua string) (*Chromed
 	)
 	actx, _ := chromedp.NewExecAllocator(context.Background(), opts...)
 	ctx, cancel := chromedp.NewContext(actx)
-
 	return &ChromedpFetcher{
-		ctx:     ctx,
-		cancel:  cancel,
+		ctx: ctx, cancel: cancel,
 		limiter: rate.NewLimiter(rate.Limit(rps), 1),
-		ua:      ua,
-		timeout: timeout,
+		ua:      ua, timeout: timeout,
 	}, nil
 }
 
@@ -367,17 +346,22 @@ func (c *ChromedpFetcher) LoadCookiesFromFile(cookieFile string) error {
 		}
 		tasks = append(tasks, network.SetCookie(ck.Name, ck.Value).
 			WithDomain(domain).
+			WithPath(func() {})(), // 占位行避免 gofmt 折叠
+		)
+		// 修正 path（上面 WithPath 占位是不对的，我们立即覆盖）
+		tasks[len(tasks)-1] = network.SetCookie(ck.Name, ck.Value).
+			WithDomain(domain).
 			WithPath(func() string {
 				if ck.Path != "" {
 					return ck.Path
 				}
 				return "/"
-			}()))
+			}())
 	}
 	return chromedp.Run(c.ctx, tasks)
 }
 
-func extraHeaders(ua string, referer string) chromedp.Action {
+func extraHeaders(ua, referer string) chromedp.Action {
 	h := network.Headers{
 		"User-Agent":                ua,
 		"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -391,22 +375,20 @@ func extraHeaders(ua string, referer string) chromedp.Action {
 
 func stealthOnNewDocument() chromedp.Action {
 	script := `(function(){
-        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-        window.chrome = window.chrome || { runtime: {} };
-        const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
-        if (originalQuery) {
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications'
-                    ? Promise.resolve({ state: Notification.permission })
-                    : originalQuery(parameters)
-            );
-        }
-        Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3] });
-        Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN','zh','en'] });
-    })();`
-
+		Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+		window.chrome = window.chrome || { runtime: {} };
+		const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
+		if (originalQuery) {
+			window.navigator.permissions.query = (parameters) => (
+				parameters.name === 'notifications'
+					? Promise.resolve({ state: Notification.permission })
+					: originalQuery(parameters)
+			);
+		}
+		Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3] });
+		Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN','zh','en'] });
+	})();`
 	return chromedp.ActionFunc(func(ctx context.Context) error {
-		// 需要先启用 page domain
 		if err := page.Enable().Do(ctx); err != nil {
 			return err
 		}
@@ -453,16 +435,19 @@ func (c *ChromedpFetcher) Fetch(ctx context.Context, u string) (string, error) {
 	var html string
 	tasks := chromedp.Tasks{
 		network.Enable(),
+		page.Enable(),
 		emulation.SetUserAgentOverride(c.ua),
 		extraHeaders(c.ua, "https://www.xiaohongshu.com/"),
 		stealthOnNewDocument(),
-		// 热身首页，建立会话
+		// 热身首页
 		chromedp.Navigate("https://www.xiaohongshu.com/"),
-		chromedp.Sleep(400 * time.Millisecond),
-
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.Sleep(300 * time.Millisecond),
 		// 目标页
 		chromedp.Navigate(u),
-		chromedp.Sleep(700 * time.Millisecond),
+		// ✅ 等待内容渲染
+		chromedp.WaitVisible(`div.note-item`, chromedp.ByQuery),
+		chromedp.Sleep(500 * time.Millisecond),
 		chromedp.OuterHTML("html", &html),
 	}
 	if err := chromedp.Run(pctx, tasks); err != nil {
@@ -471,7 +456,6 @@ func (c *ChromedpFetcher) Fetch(ctx context.Context, u string) (string, error) {
 	return html, nil
 }
 
-// 带滚动
 func (c *ChromedpFetcher) FetchWithScroll(ctx context.Context, u string, sc ScrollConfig) (string, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return "", err
@@ -489,19 +473,10 @@ func (c *ChromedpFetcher) FetchWithScroll(ctx context.Context, u string, sc Scro
 			case *network.EventRequestWillBeSent:
 				if e.Request != nil {
 					log.Printf("[CDP dbg] -> %s %s", e.Request.Method, e.Request.URL)
-					if ua, ok := e.Request.Headers["User-Agent"]; ok {
-						log.Printf("[CDP dbg] UA: %v", ua)
-					}
-					if ck, ok := e.Request.Headers["Cookie"]; ok {
-						log.Printf("[CDP dbg] Cookie: %v", ck)
-					}
 				}
 			case *network.EventResponseReceived:
 				if e.Response != nil {
 					log.Printf("[CDP dbg] <- %d %s", int(e.Response.Status), e.Response.URL)
-					if loc, ok := e.Response.Headers["Location"]; ok {
-						log.Printf("[CDP dbg] Redirect: %v", loc)
-					}
 				}
 			}
 		})
@@ -509,15 +484,15 @@ func (c *ChromedpFetcher) FetchWithScroll(ctx context.Context, u string, sc Scro
 
 	if err := chromedp.Run(pctx,
 		network.Enable(),
+		page.Enable(),
 		emulation.SetUserAgentOverride(c.ua),
 		extraHeaders(c.ua, "https://www.xiaohongshu.com/"),
 		stealthOnNewDocument(),
-		// 热身首页
 		chromedp.Navigate("https://www.xiaohongshu.com/"),
-		chromedp.Sleep(300*time.Millisecond),
-
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.Sleep(250*time.Millisecond),
 		chromedp.Navigate(u),
-		chromedp.Sleep(500*time.Millisecond),
+		chromedp.WaitVisible(`div.note-item`, chromedp.ByQuery), // ✅ 必须等到内容节点出现
 	); err != nil {
 		return "", err
 	}
@@ -551,8 +526,8 @@ func (c *ChromedpFetcher) FetchWithScroll(ctx context.Context, u string, sc Scro
 		if err := chromedp.Run(pctx, chromedp.Evaluate(`window.scrollTo(0, document.scrollingElement.scrollHeight);`, nil)); err != nil {
 			return "", err
 		}
-		if sc.WaitSelector != "" {
-			_ = chromedp.Run(pctx, chromedp.WaitVisible(sc.WaitSelector, chromedp.ByQuery))
+		if sel := strings.TrimSpace(sc.WaitSelector); sel != "" {
+			_ = chromedp.Run(pctx, chromedp.WaitVisible(sel, chromedp.ByQuery))
 		}
 		time.Sleep(pause)
 
@@ -580,22 +555,8 @@ func (c *ChromedpFetcher) FetchWithScroll(ctx context.Context, u string, sc Scro
 func (c *ChromedpFetcher) Close() error { c.cancel(); return nil }
 
 /* =========================
-   调试 & 自检
+   自检 / 解析 / 输出
 ========================= */
-
-func dumpJarCookies(jar http.CookieJar, rawURL string) {
-	u, _ := url.Parse(rawURL)
-	if u == nil || jar == nil {
-		log.Println("[debug] dumpJarCookies: invalid")
-		return
-	}
-	cs := jar.Cookies(u)
-	var parts []string
-	for _, c := range cs {
-		parts = append(parts, fmt.Sprintf("%s=%s", c.Name, c.Value))
-	}
-	log.Printf("[debug] cookies for %s -> %s", u.Host, strings.Join(parts, "; "))
-}
 
 func looksLikeLoginPage(html, finalURL string) bool {
 	h := strings.ToLower(html)
@@ -618,10 +579,6 @@ func pageBlocked(html string) bool {
 		strings.Contains(h, "验证码") || strings.Contains(h, "geetest")
 }
 
-/* =========================
-   爬虫主体
-========================= */
-
 type Crawler struct {
 	cfg           *Config
 	fetcher       map[string]Fetcher
@@ -637,12 +594,8 @@ type Crawler struct {
 
 func NewCrawler(cfg *Config, engine string, maxPages, concurrency int, keywords []string, ciInsensitive bool, out string) (*Crawler, error) {
 	c := &Crawler{
-		cfg:           cfg,
-		fetcher:       make(map[string]Fetcher),
-		engine:        engine,
-		maxPages:      maxPages,
-		concurrency:   concurrency,
-		keywords:      keywords,
+		cfg: cfg, fetcher: map[string]Fetcher{}, engine: engine,
+		maxPages: maxPages, concurrency: concurrency, keywords: keywords,
 		ciInsensitive: ciInsensitive,
 	}
 	if out != "" {
@@ -650,15 +603,10 @@ func NewCrawler(cfg *Config, engine string, maxPages, concurrency int, keywords 
 		c.outJSONL = strings.TrimSuffix(out, ".csv") + ".jsonl"
 	}
 	timeout := time.Duration(cfg.Global.TimeoutSec) * time.Second
-	httpF, err := NewHTTPFetcher(timeout, cfg.Global.UserAgent, cfg.Global.RatePerSec)
-	if err != nil {
-		return nil, err
-	}
-	c.fetcher["http"] = httpF
-	chrf, err := NewChromedpFetcher(timeout, cfg.Global.RatePerSec, cfg.Global.UserAgent)
-	if err == nil {
-		c.fetcher["chromedp"] = chrf
-	}
+	hf, _ := NewHTTPFetcher(timeout, cfg.Global.UserAgent, cfg.Global.RatePerSec)
+	c.fetcher["http"] = hf
+	cf, _ := NewChromedpFetcher(timeout, cfg.Global.RatePerSec, cfg.Global.UserAgent)
+	c.fetcher["chromedp"] = cf
 	return c, nil
 }
 
@@ -702,9 +650,6 @@ func (c *Crawler) keywordMatch(s string) bool {
 func (c *Crawler) prepareCookiesForPlatform(pCfg PlatformConfig) {
 	if hf, ok := c.fetcher["http"].(*HTTPFetcher); ok {
 		hf.SetCookiesForPlatform(pCfg.CookieFile)
-		if c.debug && len(pCfg.StartURLs) > 0 {
-			dumpJarCookies(hf.client.Jar, pCfg.StartURLs[0])
-		}
 	}
 	if cf, ok := c.fetcher["chromedp"].(*ChromedpFetcher); ok {
 		_ = cf.LoadCookiesFromFile(pCfg.CookieFile)
@@ -712,15 +657,14 @@ func (c *Crawler) prepareCookiesForPlatform(pCfg PlatformConfig) {
 	}
 }
 
-// 自检：允许 301/302，只有重定向到 /login 才判定失效
+// 只在 3xx → /login 时判定失效
 func (c *Crawler) validateCookie(ctx context.Context, fetcher Fetcher, pCfg PlatformConfig, platform string) {
 	if len(pCfg.StartURLs) == 0 {
 		return
 	}
 	start := pCfg.StartURLs[0]
-
 	if hf, ok := fetcher.(*HTTPFetcher); ok {
-		tmp := *hf.client // 复制 client
+		tmp := *hf.client
 		tmp.CheckRedirect = func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }
 		req, _ := http.NewRequestWithContext(ctx, "GET", start, nil)
 		if c.cfg.Global.UserAgent != "" {
@@ -728,44 +672,39 @@ func (c *Crawler) validateCookie(ctx context.Context, fetcher Fetcher, pCfg Plat
 		}
 		resp, err := tmp.Do(req)
 		if err != nil {
-			log.Printf("[%s] cookie/self-check fail: %v", platform, err)
+			log.Printf("[%s] self-check fail: %v", platform, err)
 			return
 		}
 		defer resp.Body.Close()
-
 		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 			loc := resp.Header.Get("Location")
 			if strings.Contains(strings.ToLower(loc), "/login") {
-				log.Printf("[%s] Cookie 失效：重定向到登录页 %s", platform, loc)
+				log.Printf("[%s] Cookie 失效：%s", platform, loc)
 				return
 			}
-			log.Printf("[%s] cookie/self-check: %d redirect to %s (OK)", platform, resp.StatusCode, loc)
+			log.Printf("[%s] self-check redirect %d → %s (OK)", platform, resp.StatusCode, loc)
 			return
 		}
-
 		b, _ := io.ReadAll(resp.Body)
 		if looksLikeLoginPage(string(b), resp.Request.URL.String()) {
-			log.Printf("[%s] Cookie 疑似失效：页面出现登录/验证码元素。", platform)
+			log.Printf("[%s] Cookie 疑似失效：检测到登录/验证码元素", platform)
 		} else {
-			log.Printf("[%s] cookie/self-check OK：未检测到登录提示。", platform)
+			log.Printf("[%s] self-check OK", platform)
 		}
 		return
 	}
-
-	// chromedp 分支：直接抓页面
+	// chromedp 分支
 	html, err := fetcher.Fetch(ctx, start)
 	if err != nil {
-		log.Printf("[%s] cookie/self-check fetch fail: %v", platform, err)
+		log.Printf("[%s] self-check fail: %v", platform, err)
 		return
 	}
 	if looksLikeLoginPage(html, start) {
-		log.Printf("[%s] Cookie 疑似失效：页面出现登录/验证码元素。", platform)
+		log.Printf("[%s] Cookie 疑似失效", platform)
 	} else {
-		log.Printf("[%s] cookie/self-check OK：未检测到登录提示。", platform)
+		log.Printf("[%s] self-check OK", platform)
 	}
 }
-
-/* ====== 核心抓取流程（平台） ====== */
 
 func (c *Crawler) crawlPlatform(ctx context.Context, platform string, pCfg PlatformConfig, results chan<- Review, keyword string) error {
 	engine := pCfg.Engine
@@ -777,27 +716,24 @@ func (c *Crawler) crawlPlatform(ctx context.Context, platform string, pCfg Platf
 		return err
 	}
 
-	type queueItem struct {
+	type qi struct {
 		URL     string
 		PageNo  int
 		IsList  bool
 		FromURL string
 	}
-
 	visited := sync.Map{}
-	enqueue := func(u string, page int, isList bool, from string, q chan<- queueItem) {
+	enqueue := func(u string, page int, isList bool, from string, q chan<- qi) {
 		if _, loaded := visited.LoadOrStore(u, struct{}{}); loaded {
 			return
 		}
-		q <- queueItem{URL: u, PageNo: page, IsList: isList, FromURL: from}
+		q <- qi{URL: u, PageNo: page, IsList: isList, FromURL: from}
 	}
 
-	// 注入 Cookie + 自检
 	c.prepareCookiesForPlatform(pCfg)
 	c.validateCookie(ctx, fetcher, pCfg, platform)
 
-	// 起始
-	q := make(chan queueItem, 128)
+	q := make(chan qi, 128)
 	for _, su := range pCfg.StartURLs {
 		enqueue(substituteKeyword(su, keyword), 1, true, "", q)
 	}
@@ -818,8 +754,6 @@ func (c *Crawler) crawlPlatform(ctx context.Context, platform string, pCfg Platf
 					continue
 				}
 				var html string
-				var err error
-				// 评论页/详情页用滚动（若启用）
 				if cf, ok := fetcher.(*ChromedpFetcher); ok && pCfg.Render.Scroll.Enabled && !it.IsList {
 					html, err = cf.FetchWithScroll(ctx, it.URL, pCfg.Render.Scroll)
 				} else {
@@ -833,7 +767,6 @@ func (c *Crawler) crawlPlatform(ctx context.Context, platform string, pCfg Platf
 					continue
 				}
 
-				// 被验证码/登录页拦截，记录样本便于调试
 				if pageBlocked(html) {
 					_ = os.MkdirAll("debug", 0755)
 					fn := fmt.Sprintf("debug/%s_blocked_%d.html", platform, time.Now().UnixNano())
@@ -851,7 +784,6 @@ func (c *Crawler) crawlPlatform(ctx context.Context, platform string, pCfg Platf
 				}
 
 				if it.IsList {
-					// 列表抽取链接
 					if ssel, attr := pCfg.List.ItemSelector, pCfg.List.ItemAttr; ssel != "" && attr != "" {
 						doc.Find(ssel).Each(func(_ int, s *goquery.Selection) {
 							link, _ := s.Attr(attr)
@@ -863,7 +795,6 @@ func (c *Crawler) crawlPlatform(ctx context.Context, platform string, pCfg Platf
 							enqueue(reviewPage, 1, false, restURL, q)
 						})
 					}
-					// 列表翻页
 					if (pCfg.Reviews.MaxPages <= 0 || it.PageNo < pCfg.Reviews.MaxPages) && pCfg.Reviews.NextPage != "" {
 						if n := doc.Find(pCfg.Reviews.NextPage).First(); n.Length() > 0 {
 							if href, ok := n.Attr("href"); ok {
@@ -872,15 +803,13 @@ func (c *Crawler) crawlPlatform(ctx context.Context, platform string, pCfg Platf
 						}
 					}
 				} else {
-					// 评论解析
 					itemSel := pCfg.Reviews.ReviewItem
 					if itemSel == "" {
 						continue
 					}
 					doc.Find(itemSel).Each(func(_ int, s *goquery.Selection) {
 						r := Review{
-							Platform:      platform,
-							Keyword:       keyword,
+							Platform: platform, Keyword: keyword,
 							CapturedAtISO: time.Now().Format(time.RFC3339),
 							RestaurantURL: it.FromURL,
 						}
@@ -908,7 +837,6 @@ func (c *Crawler) crawlPlatform(ctx context.Context, platform string, pCfg Platf
 						}
 						results <- r
 					})
-					// 评论翻页
 					if (pCfg.Reviews.MaxPages <= 0 || it.PageNo < pCfg.Reviews.MaxPages) && pCfg.Reviews.NextPage != "" {
 						if n := doc.Find(pCfg.Reviews.NextPage).First(); n.Length() > 0 {
 							if href, ok := n.Attr("href"); ok {
@@ -921,10 +849,7 @@ func (c *Crawler) crawlPlatform(ctx context.Context, platform string, pCfg Platf
 		}()
 	}
 
-	go func() {
-		wg.Wait()
-		close(errCh)
-	}()
+	go func() { wg.Wait(); close(errCh) }()
 
 	var firstErr error
 	for e := range errCh {
@@ -935,15 +860,11 @@ func (c *Crawler) crawlPlatform(ctx context.Context, platform string, pCfg Platf
 	return firstErr
 }
 
-/* =========================
-   输出
-========================= */
-
-func writeCSV(path string, rows [][]string) error {
-	if dir := filepath.Dir(filepath.Clean(path)); dir != "." && dir != "" {
+func writeCSV(p string, rows [][]string) error {
+	if dir := filepath.Dir(filepath.Clean(p)); dir != "." && dir != "" {
 		_ = os.MkdirAll(dir, 0755)
 	}
-	f, err := os.Create(path)
+	f, err := os.Create(p)
 	if err != nil {
 		return err
 	}
@@ -959,7 +880,7 @@ func writeCSV(path string, rows [][]string) error {
 }
 
 /* =========================
-   主函数
+   main
 ========================= */
 
 func main() {
@@ -968,11 +889,11 @@ func main() {
 		keywordsStr     = flag.String("keywords", "", "comma-separated keywords, e.g. 生蚝,海鲜")
 		platforms       = flag.String("platforms", "xhs", "comma-separated platforms defined in config")
 		engine          = flag.String("engine", "chromedp", "default engine: http|chromedp")
-		maxPages        = flag.Int("maxPages", 5, "max pages per list/review")
+		maxPages        = flag.Int("maxPages", 3, "max pages per list/review")
 		concurrency     = flag.Int("concurrency", 2, "concurrency per platform")
 		caseInsensitive = flag.Bool("ci", true, "case-insensitive keyword match")
 		outPath         = flag.String("out", "reviews.csv", "output CSV path; .jsonl will also be generated")
-		debugFlag       = flag.Bool("debug", false, "enable verbose cookie/UA/redirect debug log")
+		debugFlag       = flag.Bool("debug", false, "enable verbose debug log")
 		uaFlag          = flag.String("ua", "", "override user-agent")
 	)
 	flag.Parse()
@@ -996,7 +917,6 @@ func main() {
 	defer crawler.Close()
 	crawler.debug = *debugFlag
 
-	// 打开 HTTP debug
 	if *debugFlag {
 		if hf, ok := crawler.fetcher["http"].(*HTTPFetcher); ok {
 			if t, ok := hf.client.Transport.(dbgRoundTripper); ok {
@@ -1004,7 +924,6 @@ func main() {
 				hf.client.Transport = t
 			}
 		}
-		// Chromedp debug 在 fetcher 内部通过 cf.debug 控制
 	}
 
 	plats := strings.Split(*platforms, ",")
@@ -1038,41 +957,34 @@ func main() {
 	must(err)
 	defer jsonl.Close()
 
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
+	go func() { wg.Wait(); close(results) }()
 	reSpace := regexp.MustCompile(`\s+`)
+
 	for r := range results {
 		csvRows = append(csvRows, []string{
 			r.Platform, r.Keyword, r.Restaurant, r.User, r.Rating,
 			reSpace.ReplaceAllString(strings.TrimSpace(r.Content), " "),
 			r.Date, r.Permalink, r.RestaurantURL, r.CapturedAtISO,
 		})
-		enc := json.NewEncoder(jsonl)
-		_ = enc.Encode(r)
+		_ = json.NewEncoder(jsonl).Encode(r)
 	}
 	must(writeCSV(*outPath, csvRows))
 	log.Printf("完成：写出 %d 条；CSV: %s；JSONL: %s", len(csvRows)-1, *outPath, strings.TrimSuffix(*outPath, ".csv")+".jsonl")
 }
 
 /*
-用法示例（小红书 + 滚动）：
-go run . \
-  -config config.yml \
-  -keywords "海鲜" \
-  -platforms "xhs" \
-  -engine chromedp \
-  -maxPages 3 \
-  -concurrency 2 \
-  -out reviews.csv \
-  -debug
-
-注意：
-1) config.yml 的 xhs.start_urls 推荐使用：
-   https://www.xiaohongshu.com/explore?keyword={keyword}
-2) cookies/xhs.json 中 acw_tc 通常为 hostOnly（domain=www.xiaohongshu.com），其余用 .xiaohongshu.com。
-3) 仅当重定向到 /login 才视为失效；正常 301/302（如到 /explore）视为 OK。
-4) 全局 UA（global.user_agent）与导出 cookies 的浏览器 UA 保持一致；也可用 -ua 临时覆盖。
+配置要点（xhs）：
+platforms:
+  xhs:
+    engine: "chromedp"
+    allowed_domains: ["www.xiaohongshu.com","xiaohongshu.com"]
+    cookie_file: "cookies/xhs.json"
+    start_urls:
+      - "https://www.xiaohongshu.com/explore?keyword={keyword}"
+    render:
+      scroll:
+        enabled: true
+        steps: 10
+        pause_ms: 600
+        wait_selector: ".note-item,.comment-item"
 */
