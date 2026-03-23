@@ -11,26 +11,26 @@ platforms:
     start_urls:
       - "https://www.xiaohongshu.com/search_result?keyword={keyword}&type=51"
     list:
-      # 2024年小红书实际DOM结构
-      item_selector: "div.note-item a.cover-mask, div.note-item a[href*='/explore/'], section.note-item a, a[href*='/explore/'].cover"
+      # 尝试多种可能的选择器（小红书可能使用动态class名）
+      item_selector: "a[href*='/explore/']"
       item_attr: "href"
     reviews:
       page_url_pattern: "https://www.xiaohongshu.com{restaurant_url}"
-      review_item: "div.note-content, div.content, article.note-content"
+      review_item: "div.note-content"
       fields:
-        restaurant: "h1.title, span.nickname, div.author"
-        user: "span.nickname, a.nickname, div.author"
-        content: "div.desc span, div.content span, div.detail-desc, span.desc, div.note-text"
-        date: "span.time, span.publish-time, time, span.date"
+        restaurant: "h1.title"
+        user: "span.nickname"
+        content: "div.desc"
+        date: "span.time"
         permalink_attr: ""
       max_pages: 1
     render:
       scroll:
         enabled: true
-        steps: 30
-        pause_ms: 2000
-        wait_selector: "div.note-item, section.note-item, div.feed-item"
-        stop_if_no_growth: 4
+        steps: 20
+        pause_ms: 1500
+        wait_selector: ""
+        stop_if_no_growth: 3
 
   dianping:
     engine: "http"

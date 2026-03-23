@@ -1200,6 +1200,14 @@ func crawlPlatformWithContext(ctx context.Context, platform string, pCfg Platfor
 		return fmt.Errorf("无法获取页面内容: %w", lastErr)
 	}
 	
+	// 调试：保存 HTML 到文件
+	debugDir := "debug"
+	os.MkdirAll(debugDir, 0755)
+	debugFile := filepath.Join(debugDir, fmt.Sprintf("%s_%s.html", platform, keyword))
+	if err := os.WriteFile(debugFile, []byte(html), 0644); err == nil {
+		log.Printf("[%s][%s] 调试: HTML 已保存到 %s", platform, keyword, debugFile)
+	}
+	
 	// 解析页面
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
