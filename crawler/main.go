@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -20,7 +21,6 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/emulation"
-
 	"github.com/PuerkitoBio/goquery"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
@@ -260,7 +260,37 @@ type ChromedpFetcher struct {
 }
 
 func NewChromedpFetcher(timeout time.Duration, rps float64, ua string) (*ChromedpFetcher, error) {
-	ctx, cancel := chromedp.NewContext(context.Background())
+	// 使用随机 UA 如果没有提供
+	if ua == "" {
+		ua = randomUA()
+	}
+	
+	// 配置 Chrome 选项 - 反检测设置
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-web-security", true),
+		chromedp.Flag("disable-features", "IsolateOrigins,site-per-process"),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-setuid-sandbox", true),
+		chromedp.Flag("disable-accelerated-2d-canvas", true),
+		chromedp.Flag("disable-accelerated-jpeg-decoding", true),
+		chromedp.Flag("disable-accelerated-mjpeg-decode", true),
+		chromedp.Flag("disable-accelerated-video-decode", true),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("disable-component-extensions-with-background-pages", true),
+		chromedp.Flag("mute-audio", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("window-size", "1280,800"),
+		chromedp.UserAgent(ua),
+	)
+	
+	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	ctx, _ := chromedp.NewContext(allocCtx)
+	
 	return &ChromedpFetcher{
 		ctx:     ctx,
 		cancel:  cancel,
@@ -350,7 +380,12 @@ func (c *ChromedpFetcher) FetchWithScroll(ctx context.Context, u string, sc Scro
 			return chromedp.ActionFunc(func(ctx context.Context) error { return nil })
 		}(),
 		chromedp.Navigate(u),
+		chromedp.Sleep(2*time.Second),
+		// 执行反检测脚本
+		chromedp.Evaluate(AntiDetectScript(), nil),
 		chromedp.Sleep(500*time.Millisecond),
+		// 模拟人类鼠标移动
+		HumanLikeBehavior(pctx),
 	); err != nil {
 		return "", err
 	}
@@ -382,8 +417,10 @@ func (c *ChromedpFetcher) FetchWithScroll(ctx context.Context, u string, sc Scro
 		}
 		lastH = curH
 
+		// 随机滚动幅度，更像人类
+		scrollAmount := rand.Intn(800) + 600
 		if err := chromedp.Run(pctx,
-			chromedp.Evaluate(`window.scrollTo(0, document.scrollingElement.scrollHeight);`, nil),
+			chromedp.Evaluate(fmt.Sprintf(`window.scrollBy(0, %d);`, scrollAmount), nil),
 		); err != nil {
 			return "", err
 		}
@@ -391,7 +428,10 @@ func (c *ChromedpFetcher) FetchWithScroll(ctx context.Context, u string, sc Scro
 		if sc.WaitSelector != "" {
 			_ = chromedp.Run(pctx, chromedp.WaitVisible(sc.WaitSelector, chromedp.ByQuery))
 		}
-		time.Sleep(pause)
+		
+		// 随机停顿时间
+		actualPause := pause + time.Duration(rand.Intn(800))*time.Millisecond
+		time.Sleep(actualPause)
 
 		if err := chromedp.Run(pctx, chromedp.Evaluate(`document.scrollingElement.scrollHeight`, &curH)); err != nil {
 			return "", err
@@ -509,13 +549,45 @@ func (c *Crawler) validateCookie(ctx context.Context, fetcher Fetcher, pCfg Plat
 	if len(pCfg.StartURLs) == 0 {
 		return
 	}
-	html, err := fetcher.Fetch(ctx, pCfg.StartURLs[0])
+	testURL := substituteKeyword(pCfg.StartURLs[0], "test")
+	html, err := fetcher.Fetch(ctx, testURL)
 	if err != nil {
-		log.Printf("[%s] cookie 验证失败：%v", platform, err)
+		log.Printf("[%s] cookie 验证请求失败：%v", platform, err)
 		return
 	}
-	if strings.Contains(html, "登录") || strings.Contains(html, "登錄") {
-		log.Printf("[%s] Cookie 似乎失效或未登录，请更新 %s", platform, pCfg.CookieFile)
+	
+	// 检测登录状态
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		log.Printf("[%s] 解析验证页面失败：%v", platform, err)
+		return
+	}
+	
+	// 小红书特殊检测
+	if platform == "xhs" {
+		// 检测登录弹窗或提示
+		if strings.Contains(html, "登录") || strings.Contains(html, "登錄") ||
+		   strings.Contains(html, "请登录") || strings.Contains(html, "手机登录") {
+			log.Printf("[%s] ⚠️ Cookie 已失效或未登录，请重新导出 Cookie 到 %s", platform, pCfg.CookieFile)
+			return
+		}
+		// 检测是否有笔记列表
+		items := doc.Find("section.note-item").Length()
+		if items == 0 {
+			items = doc.Find("div.feed-item").Length()
+		}
+		if items == 0 {
+			log.Printf("[%s] ⚠️ 未检测到笔记列表，可能被反爬拦截，请检查 Cookie 或降低频率", platform)
+		} else {
+			log.Printf("[%s] ✓ Cookie 验证通过，检测到 %d 个笔记项", platform, items)
+		}
+		return
+	}
+	
+	// 通用登录检测
+	if strings.Contains(html, "登录") || strings.Contains(html, "登錄") ||
+	   strings.Contains(html, "请登录") || strings.Contains(html, "login") {
+		log.Printf("[%s] ⚠️ Cookie 似乎失效或未登录，请更新 %s", platform, pCfg.CookieFile)
 	}
 }
 
@@ -709,6 +781,9 @@ func writeCSV(path string, rows [][]string) error {
 ========================= */
 
 func main() {
+	log.Println("🚀 评论抓取工具启动")
+	log.Printf("使用 User-Agent: %s", randomUA())
+	
 	var (
 		cfgPath         = flag.String("config", "config.yml", "config yaml path")
 		keywordsStr     = flag.String("keywords", "", "comma-separated keywords, e.g. 生蚝,蟹粉")
@@ -722,15 +797,17 @@ func main() {
 	flag.Parse()
 
 	if *keywordsStr == "" {
-		log.Fatal("请用 -keywords 指定关键词，多个用逗号分隔")
+		log.Fatal("❌ 请用 -keywords 指定关键词，多个用逗号分隔")
 	}
 	kw := strings.Split(*keywordsStr, ",")
 	for i := range kw {
 		kw[i] = strings.TrimSpace(kw[i])
 	}
+	log.Printf("📋 关键词: %v", kw)
 
 	cfg, err := loadConfig(*cfgPath)
 	must(err)
+	log.Printf("⚙️ 配置加载成功，全局限速: %.1f req/s", cfg.Global.RatePerSec)
 
 	crawler, err := NewCrawler(cfg, *engine, *maxPages, *concurrency, kw, *caseInsensitive, *outPath)
 	must(err)
@@ -740,6 +817,7 @@ func main() {
 	for i := range plats {
 		plats[i] = strings.TrimSpace(plats[i])
 	}
+	log.Printf("🎯 目标平台: %v", plats)
 
 	ctx := context.Background()
 	results := make(chan Review, 1024)

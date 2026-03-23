@@ -1,0 +1,34 @@
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+crawler/crawler_test
+*.test
+
+# Output data
+data/
+*.csv
+*.jsonl
+crawler/data/
+crawler/cookies/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Model weights
+out-lora/
+*.bin
+*.safetensors
+
+# Logs
+*.log
+logs/

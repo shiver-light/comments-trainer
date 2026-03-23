@@ -1,61 +1,57 @@
 global:
-  user_agent: "Mozilla/5.0 (compatible; KWReviewBot/1.0; +https://example.com)"
-  timeout_sec: 15
-  # 每域名每秒抓取次数上限（令牌桶）
-  rate_per_sec: 0.8
+  user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  timeout_sec: 45
+  rate_per_sec: 0.3
 
 platforms:
+  xhs:
+    engine: "chromedp"
+    allowed_domains: ["www.xiaohongshu.com", "www.xhs.cn"]
+    cookie_file: "cookies/xhs.json"
+    start_urls:
+      - "https://www.xiaohongshu.com/search_result?keyword={keyword}&type=51"
+    list:
+      item_selector: "section.note-item a.cover, section.note-item a[href*='/explore/']"
+      item_attr: "href"
+    reviews:
+      page_url_pattern: "https://www.xiaohongshu.com{restaurant_url}"
+      review_item: "div.note-content"
+      fields:
+        restaurant: "h1.title"
+        user: "a.nickname"
+        content: "div.desc span, div.content span, div.detail-desc, div.note-text span"
+        date: "span.time, span.publish-time, time"
+        permalink_attr: ""
+      max_pages: 1
+    render:
+      scroll:
+        enabled: true
+        steps: 30
+        pause_ms: 2000
+        wait_selector: "section.note-item, div.feed-item"
+        stop_if_no_growth: 4
 
   dianping:
     engine: "http"
     allowed_domains: ["www.dianping.com", "m.dianping.com"]
+    cookie_file: "cookies/dianping.json"
     start_urls:
-      - "https://www.dianping.com/search/keyword/2/{keyword}"  # 城市ID需替换，或改用其它入口
+      - "https://www.dianping.com/search/keyword/2/{keyword}"
     list:
       item_selector: "a[href*='/shop/']"
       item_attr: "href"
     reviews:
       page_url_pattern: "{restaurant_url}"
-      review_item: "div.review-Item"                  # 示意
+      review_item: "div.review-item, li[data-id]"
       fields:
-        restaurant: "h1.shop-name"
-        user: ".name"
-        rating_attr: ".star"
-        content: ".desc, .review-words"               # 多选其一
-        date: ".time"
-        permalink_attr: "a.review-link@href"
+        restaurant: "h1.shop-name, h1.title"
+        user: ".name, .username"
+        rating_attr: ".star, .score"
+        content: ".desc, .review-words, .content"
+        date: ".time, .date"
+        permalink_attr: ""
       next_page: "a.next"
       max_pages: 3
-      render:
-        scroll:
-          enabled: false
-      cookie_file: "cookies/dianping.json"
-
-  xhs:   # 小红书
-    engine: "chromedp"                                # 动态渲染更稳
-    allowed_domains: ["www.xiaohongshu.com", "www.xhs.cn"]
-    start_urls:
-      - "https://www.xiaohongshu.com/search_result?keyword={keyword}"  # 示意
-    list:
-      item_selector: "a[href*='/explore/']"           # 笔记链接
-      item_attr: "href"
-    reviews:
-      page_url_pattern: "{restaurant_url}"
-      review_item: "div.note-item, div.comment-item"  # 按页面实际 DOM 调整
-      fields:
-        restaurant: "meta[property='og:title']@content" # 若无餐厅概念，可当标题
-        user: "a.user-name"
-        rating_text: ""                                 # 小红书多为“推荐/种草”文本，无星级
-        content: "div.note-content, div.comment-content"
-        date: "time, .date"
-        permalink_attr: "link[rel='canonical']@href"
-      next_page: ""                                     # 多为瀑布流；可用滚动加载策略
-      max_pages: 2
-      render:
-        scroll:
-          enabled: true    # 开启滚动
-          steps: 12        # 下拉次数上限
-          pause_ms: 700    # 每次下拉后等待毫秒
-          wait_selector: ".note-item, .comment-item"  # 每次下拉后等待出现的元素（可留空）
-          stop_if_no_growth: 3  # 连续几次高度无增长就提前停止
-      cookie_file: "cookies/xhs.json"
+    render:
+      scroll:
+        enabled: false
