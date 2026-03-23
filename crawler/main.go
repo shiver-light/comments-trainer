@@ -949,9 +949,13 @@ func runInteractiveLogin(platforms string) error {
 		log.Println("⏳ 请在浏览器中完成登录，然后按回车键继续...")
 		fmt.Scanln()
 		
-		// 获取 Cookie
-		var cookies []chromedp.Cookie
-		if err := chromedp.Run(ctx, chromedp.Cookies(&cookies)); err != nil {
+		// 获取 Cookie 使用 network.GetAllCookies
+		var cookies []*network.Cookie
+		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			var err error
+			cookies, err = network.GetAllCookies().Do(ctx)
+			return err
+		})); err != nil {
 			return fmt.Errorf("获取 cookie 失败: %w", err)
 		}
 		
