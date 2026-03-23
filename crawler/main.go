@@ -1118,88 +1118,125 @@ func crawlWithLogin(ctx context.Context, platform string, keywords []string, max
 func crawlPlatformWithContext(ctx context.Context, platform string, pCfg PlatformConfig, results chan<- Review, keyword string, ciInsensitive bool, cfg *Config) error {
 	// 这里简化实现，只抓取列表页
 	startURL := substituteKeyword(pCfg.StartURLs[0], keyword)
-
+	
 	log.Printf("[%s][%s] 抓取: %s", platform, keyword, startURL)
-
+	
 	// 使用 chromedp 抓取页面
 	var html string
 	scrollCfg := pCfg.Render.Scroll
-
-	if scrollCfg.Enabled {
-		// 滚动抓取
-		steps := scrollCfg.Steps
-		if steps <= 0 {
-			steps = 10
+	
+	// 增加重试机制
+	maxRetries := 3
+	var lastErr error
+	
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("[%s][%s] 重试第 %d 次...", platform, keyword, attempt+1)
+			time.Sleep(2 * time.Second)
 		}
-		pause := time.Duration(scrollCfg.PauseMS) * time.Millisecond
-		if pause <= 0 {
-			pause = 600 * time.Millisecond
-		}
-
-		// 导航到页面
-		if err := chromedp.Run(ctx,
-			chromedp.Navigate(startURL),
-			chromedp.Sleep(2*time.Second),
-		); err != nil {
-			return err
-		}
-
-		// 执行滚动
-		for i := 0; i < steps; i++ {
-			if err := chromedp.Run(ctx,
-				chromedp.Evaluate(`window.scrollBy(0, 800);`, nil),
-				chromedp.Sleep(pause),
-			); err != nil {
-				break
+		
+		if scrollCfg.Enabled {
+			// 滚动抓取
+			steps := scrollCfg.Steps
+			if steps <= 0 {
+				steps = 10
+			}
+			pause := time.Duration(scrollCfg.PauseMS) * time.Millisecond
+			if pause <= 0 {
+				pause = 600 * time.Millisecond
+			}
+			
+			// 导航到页面 - 增加等待时间
+			err := chromedp.Run(ctx,
+				chromedp.Navigate(startURL),
+				chromedp.WaitReady("body"),
+				chromedp.Sleep(3*time.Second), // 增加等待时间
+			)
+			if err != nil {
+				lastErr = err
+				log.Printf("[%s][%s] 导航失败: %v", platform, keyword, err)
+				continue
+			}
+			
+			// 执行滚动
+			for i := 0; i < steps; i++ {
+				err := chromedp.Run(ctx,
+					chromedp.Evaluate(`window.scrollBy(0, 800);`, nil),
+					chromedp.Sleep(pause),
+				)
+				if err != nil {
+					log.Printf("[%s][%s] 滚动中断: %v", platform, keyword, err)
+					break
+				}
+			}
+			
+			// 获取页面内容
+			err = chromedp.Run(ctx, chromedp.OuterHTML("html", &html))
+			if err != nil {
+				lastErr = err
+				log.Printf("[%s][%s] 获取HTML失败: %v", platform, keyword, err)
+				continue
+			}
+		} else {
+			// 普通抓取 - 增加等待时间
+			err := chromedp.Run(ctx,
+				chromedp.Navigate(startURL),
+				chromedp.WaitReady("body"),
+				chromedp.Sleep(3*time.Second), // 增加等待时间
+				chromedp.OuterHTML("html", &html),
+			)
+			if err != nil {
+				lastErr = err
+				log.Printf("[%s][%s] 抓取失败: %v", platform, keyword, err)
+				continue
 			}
 		}
-
-		// 获取页面内容
-		if err := chromedp.Run(ctx, chromedp.OuterHTML("html", &html)); err != nil {
-			return err
-		}
-	} else {
-		// 普通抓取
-		if err := chromedp.Run(ctx,
-			chromedp.Navigate(startURL),
-			chromedp.Sleep(2*time.Second),
-			chromedp.OuterHTML("html", &html),
-		); err != nil {
-			return err
-		}
+		
+		// 成功获取HTML，跳出重试循环
+		break
 	}
-
+	
+	if html == "" {
+		return fmt.Errorf("无法获取页面内容: %w", lastErr)
+	}
+	
 	// 解析页面
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return err
 	}
-
+	
+	// 检查是否需要登录
+	if strings.Contains(html, "登录") && strings.Contains(html, "登录后查看") {
+		return fmt.Errorf("需要登录才能查看内容")
+	}
+	
 	// 提取笔记列表
 	itemSel := pCfg.List.ItemSelector
 	itemAttr := pCfg.List.ItemAttr
-
+	
+	count := 0
 	doc.Find(itemSel).Each(func(i int, s *goquery.Selection) {
 		link, exists := s.Attr(itemAttr)
 		if !exists || link == "" {
 			return
 		}
-
+		
 		// 提取标题/内容（简化版）
 		content := strings.TrimSpace(s.Text())
 		if content == "" {
 			content = link
 		}
-
+		
 		// 检查关键词匹配
 		if ciInsensitive {
-			content = strings.ToLower(content)
-			kw := strings.ToLower(keyword)
-			if !strings.Contains(content, kw) {
+			contentLower := strings.ToLower(content)
+			kwLower := strings.ToLower(keyword)
+			if !strings.Contains(contentLower, kwLower) {
 				return
 			}
 		}
-
+		
 		results <- Review{
 			Platform:      platform,
 			Keyword:       keyword,
@@ -1208,8 +1245,11 @@ func crawlPlatformWithContext(ctx context.Context, platform string, pCfg Platfor
 			Permalink:     link,
 			CapturedAtISO: time.Now().Format(time.RFC3339),
 		}
+		count++
 	})
-
+	
+	log.Printf("[%s][%s] 提取到 %d 条数据", platform, keyword, count)
+	
 	return nil
 }
 
