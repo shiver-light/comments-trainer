@@ -1221,7 +1221,6 @@ func crawlPlatformWithContext(ctx context.Context, platform string, pCfg Platfor
 	
 	// 提取笔记列表
 	itemSel := pCfg.List.ItemSelector
-	itemAttr := pCfg.List.ItemAttr
 	
 	count := 0
 	doc.Find(itemSel).Each(func(i int, s *goquery.Selection) {
