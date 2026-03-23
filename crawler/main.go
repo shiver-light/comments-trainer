@@ -16,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -782,7 +783,8 @@ func writeCSV(path string, rows [][]string) error {
 
 func main() {
 	log.Println("🚀 评论抓取工具启动")
-	log.Printf("使用 User-Agent: %s", randomUA())
+	log.Printf("🖥️  操作系统: %s", runtime.GOOS)
+	log.Printf("🌐 使用 User-Agent: %s", randomUA())
 	
 	var (
 		cfgPath         = flag.String("config", "config.yml", "config yaml path")
