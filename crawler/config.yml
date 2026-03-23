@@ -11,8 +11,8 @@ platforms:
     start_urls:
       - "https://www.xiaohongshu.com/search_result?keyword={keyword}&type=51"
     list:
-      # 尝试多种可能的选择器（小红书可能使用动态class名）
-      item_selector: "a[href*='/explore/']"
+      # 可见的笔记链接（有 cover mask 类，排除隐藏的）
+      item_selector: "a.cover.mask[href*='/explore/'], a[class*='cover'][href*='/explore/']"
       item_attr: "href"
     reviews:
       page_url_pattern: "https://www.xiaohongshu.com{restaurant_url}"
