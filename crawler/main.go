@@ -266,7 +266,7 @@ func NewChromedpFetcher(timeout time.Duration, rps float64, ua string) (*Chromed
 	if ua == "" {
 		ua = randomUA()
 	}
-	
+
 	// 配置 Chrome 选项 - 反检测设置
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
@@ -289,10 +289,10 @@ func NewChromedpFetcher(timeout time.Duration, rps float64, ua string) (*Chromed
 		chromedp.Flag("window-size", "1280,800"),
 		chromedp.UserAgent(ua),
 	)
-	
+
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	ctx, _ := chromedp.NewContext(allocCtx)
-	
+
 	return &ChromedpFetcher{
 		ctx:     ctx,
 		cancel:  cancel,
@@ -430,7 +430,7 @@ func (c *ChromedpFetcher) FetchWithScroll(ctx context.Context, u string, sc Scro
 		if sc.WaitSelector != "" {
 			_ = chromedp.Run(pctx, chromedp.WaitVisible(sc.WaitSelector, chromedp.ByQuery))
 		}
-		
+
 		// 随机停顿时间
 		actualPause := pause + time.Duration(rand.Intn(800))*time.Millisecond
 		time.Sleep(actualPause)
@@ -557,14 +557,14 @@ func (c *Crawler) validateCookie(ctx context.Context, fetcher Fetcher, pCfg Plat
 		log.Printf("[%s] cookie 验证请求失败：%v", platform, err)
 		return false
 	}
-	
+
 	// 检测登录状态
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		log.Printf("[%s] 解析验证页面失败：%v", platform, err)
 		return false
 	}
-	
+
 	// 小红书特殊检测
 	if platform == "xhs" {
 		// 检测登录弹窗或提示
@@ -586,14 +586,14 @@ func (c *Crawler) validateCookie(ctx context.Context, fetcher Fetcher, pCfg Plat
 		log.Printf("[%s] ✓ Cookie 验证通过，检测到 %d 个笔记项", platform, items)
 		return true
 	}
-	
+
 	// 通用登录检测
 	if strings.Contains(html, "登录") || strings.Contains(html, "登錄") ||
 	   strings.Contains(html, "请登录") || strings.Contains(html, "login") {
 		log.Printf("[%s] ⚠️ Cookie 似乎失效或未登录", platform)
 		return false
 	}
-	
+
 	return true
 }
 
@@ -658,7 +658,7 @@ func (c *Crawler) crawlPlatform(ctx context.Context, platform string, pCfg Platf
 
 				var html string
 				var err error
-				// 仅在 chromedp 且启用滚动时，在“评论页/详情页”(IsList=false)使用滚动抓取
+				// 仅在 chromedp 且启用滚动时，在"评论页/详情页"(IsList=false)使用滚动抓取
 				if cf, ok := fetcher.(*ChromedpFetcher); ok && pCfg.Render.Scroll.Enabled && !it.IsList {
 					html, err = cf.FetchWithScroll(ctx, it.URL, pCfg.Render.Scroll)
 				} else {
@@ -796,7 +796,7 @@ func main() {
 	log.Println("🚀 评论抓取工具启动")
 	log.Printf("🖥️  操作系统: %s", runtime.GOOS)
 	log.Printf("🌐 使用 User-Agent: %s", randomUA())
-	
+
 	var (
 		cfgPath          = flag.String("config", "config.yml", "config yaml path")
 		keywordsStr      = flag.String("keywords", "", "comma-separated keywords, e.g. 生蚝,蟹粉")
@@ -813,7 +813,7 @@ func main() {
 	// 如果启用交互式登录模式
 	if *interactiveLogin {
 		log.Println("🔐 启用交互式登录模式")
-		
+
 		// 解析关键词（如果有）
 		var kw []string
 		if *keywordsStr != "" {
@@ -822,7 +822,7 @@ func main() {
 				kw[i] = strings.TrimSpace(kw[i])
 			}
 		}
-		
+
 		if err := runInteractiveLogin(*platforms, kw, *maxPages, *concurrency, *outPath, *caseInsensitive); err != nil {
 			log.Fatalf("❌ 登录失败: %v", err)
 		}
@@ -915,7 +915,7 @@ func checkXHSCookieValid() bool {
 	if err != nil {
 		return false
 	}
-	
+
 	// 简单检查是否包含 session 相关的 cookie
 	content := string(data)
 	sessionIndicators := []string{"web_session", "session", "ticket", "token", "login"}
@@ -934,31 +934,31 @@ func contains(s, substr string) bool {
 // runInteractiveLogin 运行交互式登录，可选登录后立即抓取
 func runInteractiveLogin(platforms string, keywords []string, maxPages, concurrency int, outPath string, ciInsensitive bool) error {
 	plats := strings.Split(platforms, ",")
-	
+
 	for _, p := range plats {
 		p = strings.TrimSpace(p)
 		if p != "xhs" {
 			log.Printf("跳过 %s，交互式登录仅支持 xhs", p)
 			continue
 		}
-		
+
 		log.Println("🔐 启动小红书交互式登录...")
 		log.Println("💡 将打开浏览器，请在浏览器中完成登录")
 		log.Println("   推荐使用：手机号 + 验证码登录")
-		
+
 		// 创建 chromedp 上下文（有头模式）
 		opts := append(chromedp.DefaultExecAllocatorOptions[:],
 			chromedp.Flag("headless", false),
 			chromedp.Flag("window-size", "1280,800"),
 			chromedp.UserAgent(randomUA()),
 		)
-		
+
 		allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 		defer cancel()
-		
+
 		ctx, cancel := chromedp.NewContext(allocCtx)
 		defer cancel()
-		
+
 		// 访问小红书并等待登录
 		if err := chromedp.Run(ctx,
 			chromedp.Navigate("https://www.xiaohongshu.com"),
@@ -966,10 +966,10 @@ func runInteractiveLogin(platforms string, keywords []string, maxPages, concurre
 		); err != nil {
 			return err
 		}
-		
+
 		log.Println("⏳ 请在浏览器中完成登录，然后按回车键继续...")
 		fmt.Scanln()
-		
+
 		// 获取 Cookie
 		var cookies []*network.Cookie
 		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
@@ -979,11 +979,11 @@ func runInteractiveLogin(platforms string, keywords []string, maxPages, concurre
 		})); err != nil {
 			return fmt.Errorf("获取 cookie 失败: %w", err)
 		}
-		
+
 		// 保存 Cookie
 		cookieFile := "cookies/xhs.json"
 		os.MkdirAll("cookies", 0755)
-		
+
 		formattedCookies := make([]map[string]interface{}, 0, len(cookies))
 		for _, c := range cookies {
 			if c.Domain == "" || !strings.Contains(c.Domain, "xiaohongshu") {
@@ -999,19 +999,19 @@ func runInteractiveLogin(platforms string, keywords []string, maxPages, concurre
 				"sameSite": "Lax",
 			})
 		}
-		
+
 		data, err := json.MarshalIndent(formattedCookies, "", "  ")
 		if err != nil {
 			return err
 		}
-		
+
 		if err := os.WriteFile(cookieFile, data, 0644); err != nil {
 			return err
 		}
-		
+
 		log.Printf("✅ Cookie 已保存到 %s", cookieFile)
 		log.Printf("📊 共导出 %d 个 Cookie", len(formattedCookies))
-		
+
 		// 验证登录
 		if err := chromedp.Run(ctx,
 			chromedp.Navigate("https://www.xiaohongshu.com/search_result?keyword=test"),
@@ -1019,15 +1019,15 @@ func runInteractiveLogin(platforms string, keywords []string, maxPages, concurre
 		); err != nil {
 			return err
 		}
-		
+
 		var html string
 		if err := chromedp.Run(ctx, chromedp.OuterHTML("html", &html)); err != nil {
 			return err
 		}
-		
+
 		if !strings.Contains(html, "登录") || !strings.Contains(html, "登录后查看") {
 			log.Println("✅ 登录验证通过！")
-			
+
 			// 如果提供了关键词，立即执行抓取
 			if len(keywords) > 0 && keywords[0] != "" {
 				log.Println("🚀 登录成功，开始抓取...")
@@ -1039,39 +1039,32 @@ func runInteractiveLogin(platforms string, keywords []string, maxPages, concurre
 			log.Println("⚠️  可能未登录成功，请重新运行")
 		}
 	}
-	
-	return nil
-}
-		} else {
-			log.Println("⚠️  可能未登录成功，请重新运行")
-		}
-	}
-	
+
 	return nil
 }
 
 // crawlWithLogin 使用已登录的 chromedp 上下文执行抓取
 func crawlWithLogin(ctx context.Context, platform string, keywords []string, maxPages, concurrency int, outPath string, ciInsensitive bool) error {
 	log.Printf("🎯 开始抓取 %s，关键词: %v", platform, keywords)
-	
+
 	cfg, err := loadConfig("config.yml")
 	if err != nil {
 		return fmt.Errorf("加载配置失败: %w", err)
 	}
-	
+
 	pCfg, ok := cfg.Platforms[platform]
 	if !ok {
 		return fmt.Errorf("平台 %s 未配置", platform)
 	}
-	
+
 	// 更新 maxPages
 	if maxPages > 0 {
 		pCfg.Reviews.MaxPages = maxPages
 	}
-	
+
 	results := make(chan Review, 1024)
 	var wg sync.WaitGroup
-	
+
 	// 为每个关键词启动抓取
 	for _, keyword := range keywords {
 		wg.Add(1)
@@ -1082,7 +1075,7 @@ func crawlWithLogin(ctx context.Context, platform string, keywords []string, max
 			}
 		}(keyword)
 	}
-	
+
 	// 收集结果
 	csvRows := [][]string{{"platform", "keyword", "restaurant", "user", "rating", "content", "date", "permalink", "restaurant_url", "captured_at"}}
 	jsonlFile := strings.TrimSuffix(outPath, ".csv") + ".jsonl"
@@ -1091,12 +1084,12 @@ func crawlWithLogin(ctx context.Context, platform string, keywords []string, max
 		return err
 	}
 	defer jsonl.Close()
-	
+
 	go func() {
 		wg.Wait()
 		close(results)
 	}()
-	
+
 	reSpace := regexp.MustCompile(`\s+`)
 	count := 0
 	for r := range results {
@@ -1109,15 +1102,15 @@ func crawlWithLogin(ctx context.Context, platform string, keywords []string, max
 		enc := json.NewEncoder(jsonl)
 		_ = enc.Encode(r)
 	}
-	
+
 	if err := writeCSV(outPath, csvRows); err != nil {
 		return err
 	}
-	
+
 	log.Printf("✅ 抓取完成: %d 条数据", count)
 	log.Printf("📄 CSV: %s", outPath)
 	log.Printf("📄 JSONL: %s", jsonlFile)
-	
+
 	return nil
 }
 
@@ -1125,13 +1118,13 @@ func crawlWithLogin(ctx context.Context, platform string, keywords []string, max
 func crawlPlatformWithContext(ctx context.Context, platform string, pCfg PlatformConfig, results chan<- Review, keyword string, ciInsensitive bool, cfg *Config) error {
 	// 这里简化实现，只抓取列表页
 	startURL := substituteKeyword(pCfg.StartURLs[0], keyword)
-	
+
 	log.Printf("[%s][%s] 抓取: %s", platform, keyword, startURL)
-	
+
 	// 使用 chromedp 抓取页面
 	var html string
 	scrollCfg := pCfg.Render.Scroll
-	
+
 	if scrollCfg.Enabled {
 		// 滚动抓取
 		steps := scrollCfg.Steps
@@ -1142,7 +1135,7 @@ func crawlPlatformWithContext(ctx context.Context, platform string, pCfg Platfor
 		if pause <= 0 {
 			pause = 600 * time.Millisecond
 		}
-		
+
 		// 导航到页面
 		if err := chromedp.Run(ctx,
 			chromedp.Navigate(startURL),
@@ -1150,7 +1143,7 @@ func crawlPlatformWithContext(ctx context.Context, platform string, pCfg Platfor
 		); err != nil {
 			return err
 		}
-		
+
 		// 执行滚动
 		for i := 0; i < steps; i++ {
 			if err := chromedp.Run(ctx,
@@ -1160,7 +1153,7 @@ func crawlPlatformWithContext(ctx context.Context, platform string, pCfg Platfor
 				break
 			}
 		}
-		
+
 		// 获取页面内容
 		if err := chromedp.Run(ctx, chromedp.OuterHTML("html", &html)); err != nil {
 			return err
@@ -1175,29 +1168,29 @@ func crawlPlatformWithContext(ctx context.Context, platform string, pCfg Platfor
 			return err
 		}
 	}
-	
+
 	// 解析页面
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return err
 	}
-	
+
 	// 提取笔记列表
 	itemSel := pCfg.List.ItemSelector
 	itemAttr := pCfg.List.ItemAttr
-	
+
 	doc.Find(itemSel).Each(func(i int, s *goquery.Selection) {
 		link, exists := s.Attr(itemAttr)
 		if !exists || link == "" {
 			return
 		}
-		
+
 		// 提取标题/内容（简化版）
 		content := strings.TrimSpace(s.Text())
 		if content == "" {
 			content = link
 		}
-		
+
 		// 检查关键词匹配
 		if ciInsensitive {
 			content = strings.ToLower(content)
@@ -1206,7 +1199,7 @@ func crawlPlatformWithContext(ctx context.Context, platform string, pCfg Platfor
 				return
 			}
 		}
-		
+
 		results <- Review{
 			Platform:      platform,
 			Keyword:       keyword,
@@ -1216,7 +1209,7 @@ func crawlPlatformWithContext(ctx context.Context, platform string, pCfg Platfor
 			CapturedAtISO: time.Now().Format(time.RFC3339),
 		}
 	})
-	
+
 	return nil
 }
 
