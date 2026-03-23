@@ -547,31 +547,32 @@ func (c *Crawler) prepareCookiesForPlatform(pCfg PlatformConfig) {
 	}
 }
 
-func (c *Crawler) validateCookie(ctx context.Context, fetcher Fetcher, pCfg PlatformConfig, platform string) {
+func (c *Crawler) validateCookie(ctx context.Context, fetcher Fetcher, pCfg PlatformConfig, platform string) bool {
 	if len(pCfg.StartURLs) == 0 {
-		return
+		return true
 	}
 	testURL := substituteKeyword(pCfg.StartURLs[0], "test")
 	html, err := fetcher.Fetch(ctx, testURL)
 	if err != nil {
 		log.Printf("[%s] cookie 验证请求失败：%v", platform, err)
-		return
+		return false
 	}
 	
 	// 检测登录状态
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		log.Printf("[%s] 解析验证页面失败：%v", platform, err)
-		return
+		return false
 	}
 	
 	// 小红书特殊检测
 	if platform == "xhs" {
 		// 检测登录弹窗或提示
 		if strings.Contains(html, "登录") || strings.Contains(html, "登錄") ||
-		   strings.Contains(html, "请登录") || strings.Contains(html, "手机登录") {
-			log.Printf("[%s] ⚠️ Cookie 已失效或未登录，请重新导出 Cookie 到 %s", platform, pCfg.CookieFile)
-			return
+		   strings.Contains(html, "请登录") || strings.Contains(html, "手机登录") ||
+		   strings.Contains(html, "登录后查看") {
+			log.Printf("[%s] ⚠️ Cookie 已失效或未登录", platform)
+			return false
 		}
 		// 检测是否有笔记列表
 		items := doc.Find("section.note-item").Length()
@@ -579,18 +580,21 @@ func (c *Crawler) validateCookie(ctx context.Context, fetcher Fetcher, pCfg Plat
 			items = doc.Find("div.feed-item").Length()
 		}
 		if items == 0 {
-			log.Printf("[%s] ⚠️ 未检测到笔记列表，可能被反爬拦截，请检查 Cookie 或降低频率", platform)
-		} else {
-			log.Printf("[%s] ✓ Cookie 验证通过，检测到 %d 个笔记项", platform, items)
+			log.Printf("[%s] ⚠️ 未检测到笔记列表，可能被反爬拦截", platform)
+			return false
 		}
-		return
+		log.Printf("[%s] ✓ Cookie 验证通过，检测到 %d 个笔记项", platform, items)
+		return true
 	}
 	
 	// 通用登录检测
 	if strings.Contains(html, "登录") || strings.Contains(html, "登錄") ||
 	   strings.Contains(html, "请登录") || strings.Contains(html, "login") {
-		log.Printf("[%s] ⚠️ Cookie 似乎失效或未登录，请更新 %s", platform, pCfg.CookieFile)
+		log.Printf("[%s] ⚠️ Cookie 似乎失效或未登录", platform)
+		return false
 	}
+	
+	return true
 }
 
 /* ====== 核心抓取流程（平台） ====== */
@@ -622,7 +626,13 @@ func (c *Crawler) crawlPlatform(ctx context.Context, platform string, pCfg Platf
 
 	// 注入 Cookie + 轻量验证
 	c.prepareCookiesForPlatform(pCfg)
-	c.validateCookie(ctx, fetcher, pCfg, platform)
+	if !c.validateCookie(ctx, fetcher, pCfg, platform) {
+		if platform == "xhs" {
+			log.Printf("[%s] 💡 提示: 请使用以下命令进行交互式登录:", platform)
+			log.Printf("    ./crawler_test -login -platforms xhs")
+			return fmt.Errorf("cookie 无效，请先登录")
+		}
+	}
 
 	// 起始
 	q := make(chan queueItem, 128)
