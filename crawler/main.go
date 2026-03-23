@@ -49,8 +49,12 @@ type PlatformConfig struct {
 	CookieFile     string   `yaml:"cookie_file"`
 	StartURLs      []string `yaml:"start_urls"`
 	List           struct {
-		ItemSelector string `yaml:"item_selector"`
-		ItemAttr     string `yaml:"item_attr"`
+		ItemSelector  string `yaml:"item_selector"`
+		ItemAttr      string `yaml:"item_attr"`
+		LinkSelector  string `yaml:"link_selector"`
+		TitleSelector string `yaml:"title_selector"`
+		AuthorSelector string `yaml:"author_selector"`
+		LikeSelector  string `yaml:"like_selector"`
 	} `yaml:"list"`
 	Reviews struct {
 		PageURLPattern string            `yaml:"page_url_pattern"` // "{restaurant_url}" 或模板
@@ -1221,33 +1225,42 @@ func crawlPlatformWithContext(ctx context.Context, platform string, pCfg Platfor
 	
 	// 提取笔记列表
 	itemSel := pCfg.List.ItemSelector
+	linkSel := pCfg.List.LinkSelector
+	titleSel := pCfg.List.TitleSelector
+	authorSel := pCfg.List.AuthorSelector
+	likeSel := pCfg.List.LikeSelector
 	
 	count := 0
 	doc.Find(itemSel).Each(func(i int, s *goquery.Selection) {
-		// 找可见的链接（非 display:none 的）
+		// 使用配置的选择器查找链接
 		var link string
-		s.Find("a[href*='/explore/']").Each(func(j int, a *goquery.Selection) {
-			if link != "" {
-				return // 已找到
-			}
-			// 检查是否有 style="display: none;"
-			style, _ := a.Attr("style")
-			if !strings.Contains(style, "display: none") {
-				link, _ = a.Attr("href")
-			}
-		})
+		if linkSel != "" {
+			link, _ = s.Find(linkSel).Attr("href")
+		}
+		
+		if link == "" {
+			// 备选：查找任何非隐藏的 explore 链接
+			s.Find("a[href*='/explore/']").Each(func(j int, a *goquery.Selection) {
+				if link != "" {
+					return
+				}
+				style, _ := a.Attr("style")
+				if !strings.Contains(style, "display: none") {
+					link, _ = a.Attr("href")
+				}
+			})
+		}
 		
 		if link == "" {
 			return
 		}
 		
-		// 提取标题 - 在 .footer .title 或 .title 中
-		content := strings.TrimSpace(s.Find(".footer .title").Text())
+		// 提取标题
+		content := strings.TrimSpace(s.Find(titleSel).Text())
 		if content == "" {
 			content = strings.TrimSpace(s.Find(".title").Text())
 		}
 		if content == "" {
-			// 如果标题为空，使用链接作为备选
 			content = link
 		}
 		if content == "" {

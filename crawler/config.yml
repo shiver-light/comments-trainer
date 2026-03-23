@@ -11,9 +11,16 @@ platforms:
     start_urls:
       - "https://www.xiaohongshu.com/search_result?keyword={keyword}&type=51"
     list:
-      # 可见的笔记链接（有 cover mask 类，排除隐藏的）
-      item_selector: "a.cover.mask[href*='/explore/'], a[class*='cover'][href*='/explore/']"
-      item_attr: "href"
+      # 笔记项容器
+      item_selector: "section.note-item"
+      # 可见的笔记链接（有 cover mask 类）
+      link_selector: "a.cover.mask[href*='/search_result/']"
+      # 标题选择器
+      title_selector: "a.title span"
+      # 作者选择器
+      author_selector: ".author .name"
+      # 点赞数选择器
+      like_selector: ".like-wrapper .count"
     reviews:
       page_url_pattern: "https://www.xiaohongshu.com{restaurant_url}"
       review_item: "div.note-content"
@@ -29,7 +36,7 @@ platforms:
         enabled: true
         steps: 20
         pause_ms: 1500
-        wait_selector: ""
+        wait_selector: "section.note-item"
         stop_if_no_growth: 3
 
   dianping:
