@@ -810,6 +810,15 @@ func main() {
 	)
 	flag.Parse()
 
+	// 如果启用交互式登录模式，跳过关键词检查
+	if *interactiveLogin {
+		log.Println("🔐 启用交互式登录模式")
+		if err := runInteractiveLogin(*platforms); err != nil {
+			log.Fatalf("❌ 登录失败: %v", err)
+		}
+		return
+	}
+
 	if *keywordsStr == "" {
 		log.Fatal("❌ 请用 -keywords 指定关键词，多个用逗号分隔")
 	}
@@ -818,15 +827,6 @@ func main() {
 		kw[i] = strings.TrimSpace(kw[i])
 	}
 	log.Printf("📋 关键词: %v", kw)
-
-	// 如果启用交互式登录模式
-	if *interactiveLogin {
-		log.Println("🔐 启用交互式登录模式")
-		if err := runInteractiveLogin(*platforms); err != nil {
-			log.Fatalf("❌ 登录失败: %v", err)
-		}
-		return
-	}
 
 	cfg, err := loadConfig(*cfgPath)
 	must(err)
