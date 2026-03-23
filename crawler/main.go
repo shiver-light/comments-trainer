@@ -810,10 +810,20 @@ func main() {
 	)
 	flag.Parse()
 
-	// 如果启用交互式登录模式，跳过关键词检查
+	// 如果启用交互式登录模式
 	if *interactiveLogin {
 		log.Println("🔐 启用交互式登录模式")
-		if err := runInteractiveLogin(*platforms); err != nil {
+		
+		// 解析关键词（如果有）
+		var kw []string
+		if *keywordsStr != "" {
+			kw = strings.Split(*keywordsStr, ",")
+			for i := range kw {
+				kw[i] = strings.TrimSpace(kw[i])
+			}
+		}
+		
+		if err := runInteractiveLogin(*platforms, kw, *maxPages, *concurrency, *outPath, *caseInsensitive); err != nil {
 			log.Fatalf("❌ 登录失败: %v", err)
 		}
 		return
@@ -921,8 +931,8 @@ func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
 
-// runInteractiveLogin 运行交互式登录
-func runInteractiveLogin(platforms string) error {
+// runInteractiveLogin 运行交互式登录，可选登录后立即抓取
+func runInteractiveLogin(platforms string, keywords []string, maxPages, concurrency int, outPath string, ciInsensitive bool) error {
 	plats := strings.Split(platforms, ",")
 	
 	for _, p := range plats {
@@ -960,7 +970,7 @@ func runInteractiveLogin(platforms string) error {
 		log.Println("⏳ 请在浏览器中完成登录，然后按回车键继续...")
 		fmt.Scanln()
 		
-		// 获取 Cookie 使用 storage.GetCookies (返回 []*network.Cookie)
+		// 获取 Cookie
 		var cookies []*network.Cookie
 		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			var err error
@@ -1017,10 +1027,195 @@ func runInteractiveLogin(platforms string) error {
 		
 		if !strings.Contains(html, "登录") || !strings.Contains(html, "登录后查看") {
 			log.Println("✅ 登录验证通过！")
+			
+			// 如果提供了关键词，立即执行抓取
+			if len(keywords) > 0 && keywords[0] != "" {
+				log.Println("🚀 登录成功，开始抓取...")
+				if err := crawlWithLogin(ctx, p, keywords, maxPages, concurrency, outPath, ciInsensitive); err != nil {
+					log.Printf("❌ 抓取失败: %v", err)
+				}
+			}
 		} else {
 			log.Println("⚠️  可能未登录成功，请重新运行")
 		}
 	}
+	
+	return nil
+}
+		} else {
+			log.Println("⚠️  可能未登录成功，请重新运行")
+		}
+	}
+	
+	return nil
+}
+
+// crawlWithLogin 使用已登录的 chromedp 上下文执行抓取
+func crawlWithLogin(ctx context.Context, platform string, keywords []string, maxPages, concurrency int, outPath string, ciInsensitive bool) error {
+	log.Printf("🎯 开始抓取 %s，关键词: %v", platform, keywords)
+	
+	cfg, err := loadConfig("config.yml")
+	if err != nil {
+		return fmt.Errorf("加载配置失败: %w", err)
+	}
+	
+	pCfg, ok := cfg.Platforms[platform]
+	if !ok {
+		return fmt.Errorf("平台 %s 未配置", platform)
+	}
+	
+	// 更新 maxPages
+	if maxPages > 0 {
+		pCfg.Reviews.MaxPages = maxPages
+	}
+	
+	results := make(chan Review, 1024)
+	var wg sync.WaitGroup
+	
+	// 为每个关键词启动抓取
+	for _, keyword := range keywords {
+		wg.Add(1)
+		go func(kw string) {
+			defer wg.Done()
+			if err := crawlPlatformWithContext(ctx, platform, pCfg, results, kw, ciInsensitive, cfg); err != nil {
+				log.Printf("[%s][%s] error: %v", platform, kw, err)
+			}
+		}(keyword)
+	}
+	
+	// 收集结果
+	csvRows := [][]string{{"platform", "keyword", "restaurant", "user", "rating", "content", "date", "permalink", "restaurant_url", "captured_at"}}
+	jsonlFile := strings.TrimSuffix(outPath, ".csv") + ".jsonl"
+	jsonl, err := os.Create(jsonlFile)
+	if err != nil {
+		return err
+	}
+	defer jsonl.Close()
+	
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+	
+	reSpace := regexp.MustCompile(`\s+`)
+	count := 0
+	for r := range results {
+		count++
+		csvRows = append(csvRows, []string{
+			r.Platform, r.Keyword, r.Restaurant, r.User, r.Rating,
+			reSpace.ReplaceAllString(strings.TrimSpace(r.Content), " "),
+			r.Date, r.Permalink, r.RestaurantURL, r.CapturedAtISO,
+		})
+		enc := json.NewEncoder(jsonl)
+		_ = enc.Encode(r)
+	}
+	
+	if err := writeCSV(outPath, csvRows); err != nil {
+		return err
+	}
+	
+	log.Printf("✅ 抓取完成: %d 条数据", count)
+	log.Printf("📄 CSV: %s", outPath)
+	log.Printf("📄 JSONL: %s", jsonlFile)
+	
+	return nil
+}
+
+// crawlPlatformWithContext 使用指定的 chromedp 上下文执行抓取
+func crawlPlatformWithContext(ctx context.Context, platform string, pCfg PlatformConfig, results chan<- Review, keyword string, ciInsensitive bool, cfg *Config) error {
+	// 这里简化实现，只抓取列表页
+	startURL := substituteKeyword(pCfg.StartURLs[0], keyword)
+	
+	log.Printf("[%s][%s] 抓取: %s", platform, keyword, startURL)
+	
+	// 使用 chromedp 抓取页面
+	var html string
+	scrollCfg := pCfg.Render.Scroll
+	
+	if scrollCfg.Enabled {
+		// 滚动抓取
+		steps := scrollCfg.Steps
+		if steps <= 0 {
+			steps = 10
+		}
+		pause := time.Duration(scrollCfg.PauseMS) * time.Millisecond
+		if pause <= 0 {
+			pause = 600 * time.Millisecond
+		}
+		
+		// 导航到页面
+		if err := chromedp.Run(ctx,
+			chromedp.Navigate(startURL),
+			chromedp.Sleep(2*time.Second),
+		); err != nil {
+			return err
+		}
+		
+		// 执行滚动
+		for i := 0; i < steps; i++ {
+			if err := chromedp.Run(ctx,
+				chromedp.Evaluate(`window.scrollBy(0, 800);`, nil),
+				chromedp.Sleep(pause),
+			); err != nil {
+				break
+			}
+		}
+		
+		// 获取页面内容
+		if err := chromedp.Run(ctx, chromedp.OuterHTML("html", &html)); err != nil {
+			return err
+		}
+	} else {
+		// 普通抓取
+		if err := chromedp.Run(ctx,
+			chromedp.Navigate(startURL),
+			chromedp.Sleep(2*time.Second),
+			chromedp.OuterHTML("html", &html),
+		); err != nil {
+			return err
+		}
+	}
+	
+	// 解析页面
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return err
+	}
+	
+	// 提取笔记列表
+	itemSel := pCfg.List.ItemSelector
+	itemAttr := pCfg.List.ItemAttr
+	
+	doc.Find(itemSel).Each(func(i int, s *goquery.Selection) {
+		link, exists := s.Attr(itemAttr)
+		if !exists || link == "" {
+			return
+		}
+		
+		// 提取标题/内容（简化版）
+		content := strings.TrimSpace(s.Text())
+		if content == "" {
+			content = link
+		}
+		
+		// 检查关键词匹配
+		if ciInsensitive {
+			content = strings.ToLower(content)
+			kw := strings.ToLower(keyword)
+			if !strings.Contains(content, kw) {
+				return
+			}
+		}
+		
+		results <- Review{
+			Platform:      platform,
+			Keyword:       keyword,
+			Restaurant:    link,
+			Content:       content,
+			Permalink:     link,
+			CapturedAtISO: time.Now().Format(time.RFC3339),
+		}
+	})
 	
 	return nil
 }
@@ -1040,4 +1235,5 @@ go run . \
 2) 遵守平台条款与 robots.txt；仅抓取公开可访问页面，不要绕过验证码/签名/登录墙等技术措施。
 3) 小红书瀑布流：在 xhs 平台 Render.Scroll.enabled=true，并设置 steps/pause_ms/wait_selector。
 4) 小红书登录：使用 -login 参数启动交互式登录模式
+5) 登录并立即抓取: ./crawler_test -login -platforms xhs -keywords "咖啡" -out coffee.csv
 */
