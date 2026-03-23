@@ -787,14 +787,15 @@ func main() {
 	log.Printf("🌐 使用 User-Agent: %s", randomUA())
 	
 	var (
-		cfgPath         = flag.String("config", "config.yml", "config yaml path")
-		keywordsStr     = flag.String("keywords", "", "comma-separated keywords, e.g. 生蚝,蟹粉")
-		platforms       = flag.String("platforms", "dianping,xhs", "comma-separated platforms defined in config")
-		engine          = flag.String("engine", "http", "default engine: http|chromedp")
-		maxPages        = flag.Int("maxPages", 5, "max pages per list/review")
-		concurrency     = flag.Int("concurrency", 2, "concurrency per platform")
-		caseInsensitive = flag.Bool("ci", true, "case-insensitive keyword match")
-		outPath         = flag.String("out", "reviews.csv", "output CSV path; .jsonl will also be generated")
+		cfgPath          = flag.String("config", "config.yml", "config yaml path")
+		keywordsStr      = flag.String("keywords", "", "comma-separated keywords, e.g. 生蚝,蟹粉")
+		platforms        = flag.String("platforms", "dianping,xhs", "comma-separated platforms defined in config")
+		engine           = flag.String("engine", "http", "default engine: http|chromedp")
+		maxPages         = flag.Int("maxPages", 5, "max pages per list/review")
+		concurrency      = flag.Int("concurrency", 2, "concurrency per platform")
+		caseInsensitive  = flag.Bool("ci", true, "case-insensitive keyword match")
+		outPath          = flag.String("out", "reviews.csv", "output CSV path; .jsonl will also be generated")
+		interactiveLogin = flag.Bool("login", false, "interactive login mode for xiaohongshu")
 	)
 	flag.Parse()
 
@@ -806,6 +807,15 @@ func main() {
 		kw[i] = strings.TrimSpace(kw[i])
 	}
 	log.Printf("📋 关键词: %v", kw)
+
+	// 如果启用交互式登录模式
+	if *interactiveLogin {
+		log.Println("🔐 启用交互式登录模式")
+		if err := runInteractiveLogin(*platforms); err != nil {
+			log.Fatalf("❌ 登录失败: %v", err)
+		}
+		return
+	}
 
 	cfg, err := loadConfig(*cfgPath)
 	must(err)
@@ -820,6 +830,17 @@ func main() {
 		plats[i] = strings.TrimSpace(plats[i])
 	}
 	log.Printf("🎯 目标平台: %v", plats)
+
+	// 针对小红书检查 Cookie，如果无效且是 chromedp 引擎，尝试交互式登录
+	for _, p := range plats {
+		if p == "xhs" && *engine == "chromedp" {
+			if !checkXHSCookieValid() {
+				log.Println("⚠️ 小红书 Cookie 无效，启动交互式登录...")
+				log.Println("💡 提示: 使用 -login 参数可以提前登录")
+				// 这里我们会在 Crawler 中处理登录逻辑
+			}
+		}
+	}
 
 	ctx := context.Background()
 	results := make(chan Review, 1024)
@@ -866,6 +887,129 @@ func main() {
 	log.Printf("完成：写出 %d 条；CSV: %s；JSONL: %s", len(csvRows)-1, *outPath, strings.TrimSuffix(*outPath, ".csv")+".jsonl")
 }
 
+// checkXHSCookieValid 检查小红书 Cookie 是否有效
+func checkXHSCookieValid() bool {
+	cookieFile := "cookies/xhs.json"
+	data, err := os.ReadFile(cookieFile)
+	if err != nil {
+		return false
+	}
+	
+	// 简单检查是否包含 session 相关的 cookie
+	content := string(data)
+	sessionIndicators := []string{"web_session", "session", "ticket", "token", "login"}
+	for _, indicator := range sessionIndicators {
+		if contains(content, indicator) {
+			return true
+		}
+	}
+	return false
+}
+
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
+}
+
+// runInteractiveLogin 运行交互式登录
+func runInteractiveLogin(platforms string) error {
+	plats := strings.Split(platforms, ",")
+	
+	for _, p := range plats {
+		p = strings.TrimSpace(p)
+		if p != "xhs" {
+			log.Printf("跳过 %s，交互式登录仅支持 xhs", p)
+			continue
+		}
+		
+		log.Println("🔐 启动小红书交互式登录...")
+		log.Println("💡 将打开浏览器，请在浏览器中完成登录")
+		log.Println("   推荐使用：手机号 + 验证码登录")
+		
+		// 创建 chromedp 上下文（有头模式）
+		opts := append(chromedp.DefaultExecAllocatorOptions[:],
+			chromedp.Flag("headless", false),
+			chromedp.Flag("window-size", "1280,800"),
+			chromedp.UserAgent(randomUA()),
+		)
+		
+		allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
+		defer cancel()
+		
+		ctx, cancel := chromedp.NewContext(allocCtx)
+		defer cancel()
+		
+		// 访问小红书并等待登录
+		if err := chromedp.Run(ctx,
+			chromedp.Navigate("https://www.xiaohongshu.com"),
+			chromedp.Sleep(2*time.Second),
+		); err != nil {
+			return err
+		}
+		
+		log.Println("⏳ 请在浏览器中完成登录，然后按回车键继续...")
+		fmt.Scanln()
+		
+		// 获取 Cookie
+		var cookies []chromedp.Cookie
+		if err := chromedp.Run(ctx, chromedp.Cookies(&cookies)); err != nil {
+			return fmt.Errorf("获取 cookie 失败: %w", err)
+		}
+		
+		// 保存 Cookie
+		cookieFile := "cookies/xhs.json"
+		os.MkdirAll("cookies", 0755)
+		
+		formattedCookies := make([]map[string]interface{}, 0, len(cookies))
+		for _, c := range cookies {
+			if c.Domain == "" || !strings.Contains(c.Domain, "xiaohongshu") {
+				continue
+			}
+			formattedCookies = append(formattedCookies, map[string]interface{}{
+				"name":     c.Name,
+				"value":    c.Value,
+				"domain":   c.Domain,
+				"path":     c.Path,
+				"httpOnly": c.HTTPOnly,
+				"secure":   c.Secure,
+				"sameSite": "Lax",
+			})
+		}
+		
+		data, err := json.MarshalIndent(formattedCookies, "", "  ")
+		if err != nil {
+			return err
+		}
+		
+		if err := os.WriteFile(cookieFile, data, 0644); err != nil {
+			return err
+		}
+		
+		log.Printf("✅ Cookie 已保存到 %s", cookieFile)
+		log.Printf("📊 共导出 %d 个 Cookie", len(formattedCookies))
+		
+		// 验证登录
+		if err := chromedp.Run(ctx,
+			chromedp.Navigate("https://www.xiaohongshu.com/search_result?keyword=test"),
+			chromedp.Sleep(2*time.Second),
+		); err != nil {
+			return err
+		}
+		
+		var html string
+		if err := chromedp.Run(ctx, chromedp.OuterHTML("html", &html)); err != nil {
+			return err
+		}
+		
+		if !strings.Contains(html, "登录") || !strings.Contains(html, "登录后查看") {
+			log.Println("✅ 登录验证通过！")
+		} else {
+			log.Println("⚠️  可能未登录成功，请重新运行")
+		}
+	}
+	
+	return nil
+}
+
 /*
 运行示例：
 go run . \
@@ -880,4 +1024,5 @@ go run . \
 1) 在 config.yml 中仅配置 dianping/xhs；为平台准备 cookies/{platform}.json（浏览器导出）。
 2) 遵守平台条款与 robots.txt；仅抓取公开可访问页面，不要绕过验证码/签名/登录墙等技术措施。
 3) 小红书瀑布流：在 xhs 平台 Render.Scroll.enabled=true，并设置 steps/pause_ms/wait_selector。
+4) 小红书登录：使用 -login 参数启动交互式登录模式
 */
