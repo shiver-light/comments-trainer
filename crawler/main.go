@@ -1225,13 +1225,32 @@ func crawlPlatformWithContext(ctx context.Context, platform string, pCfg Platfor
 	
 	count := 0
 	doc.Find(itemSel).Each(func(i int, s *goquery.Selection) {
-		link, exists := s.Attr(itemAttr)
-		if !exists || link == "" {
+		// 找可见的链接（非 display:none 的）
+		var link string
+		s.Find("a[href*='/explore/']").Each(func(j int, a *goquery.Selection) {
+			if link != "" {
+				return // 已找到
+			}
+			// 检查是否有 style="display: none;"
+			style, _ := a.Attr("style")
+			if !strings.Contains(style, "display: none") {
+				link, _ = a.Attr("href")
+			}
+		})
+		
+		if link == "" {
 			return
 		}
 		
-		// 提取标题/内容（简化版）
-		content := strings.TrimSpace(s.Text())
+		// 提取标题 - 在 .footer .title 或 .title 中
+		content := strings.TrimSpace(s.Find(".footer .title").Text())
+		if content == "" {
+			content = strings.TrimSpace(s.Find(".title").Text())
+		}
+		if content == "" {
+			// 如果标题为空，使用链接作为备选
+			content = link
+		}
 		if content == "" {
 			content = link
 		}
